@@ -104,22 +104,47 @@ def train(
                 if g in LETTER2IDX:
                     mask[LETTER2IDX[g]] = 0.0
             probs = probs * mask
+            
+            # Add mask to ensure only valid indices for LETTERS are selected
+            valid_mask = torch.zeros_like(probs)
+            valid_mask[:len(LETTERS)] = 1.0
+            probs = probs * valid_mask
+            
             if probs.sum().item() == 0:
                 probs = torch.ones_like(probs)
+                # Apply valid mask again if we reset the probabilities
+                probs = probs * valid_mask
             probs = probs / probs.sum()
 
             alpha = 0.1
             prior = letter_frequency_prior(candidates, device)
+            
+            # Ensure prior also has the right dimensions
+            if len(prior) > len(probs):
+                prior = prior[:len(probs)]
+            elif len(prior) < len(probs):
+                padding = torch.zeros(len(probs) - len(prior), device=device)
+                prior = torch.cat([prior, padding], dim=0)
+                
             probs = (1 - alpha)*probs + alpha*prior
+            probs = probs * valid_mask  # Apply valid mask after combining with prior
             probs = probs / probs.sum()
 
             dist = torch.distributions.Categorical(probs)
             idx = dist.sample()
+            
+            # Safety check to ensure idx is valid (should not be needed with masks)
+            idx_val = idx.item()
+            if idx_val >= len(LETTERS):
+                print(f"Warning: Sampled index {idx_val} exceeds LETTERS length {len(LETTERS)}")
+                idx_val = min(idx_val, len(LETTERS)-1)
+                idx = torch.tensor(idx_val, device=device)
+                
             log_probs.append(dist.log_prob(idx))
             entropies.append(dist.entropy())
             values.append(value.squeeze(0))
 
-            action = LETTERS[idx.item()]
+            action = LETTERS[idx_val]
             (state, guessed), r, done, _ = env.step(action)
             rewards.append(r)
             masks.append(1 - int(done))
